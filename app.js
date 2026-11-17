@@ -14,7 +14,9 @@ const ICON = {
   more: '<svg class="ico" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/></svg>',
   play: '<svg class="ico" viewBox="0 0 24 24"><path d="M7 5v14l12-7z" fill="currentColor"/></svg>',
   back: '<svg class="ico" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>',
-  close: '<svg class="ico" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>'
+  close: '<svg class="ico" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+  pip: '<svg class="ico" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="11" width="7" height="6" rx="1" fill="currentColor"/></svg>',
+  bell: '<svg class="ico" viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4zM10 20a2 2 0 0 0 4 0"/></svg>'
 };
 
 /* ---------- utilidades ---------- */
@@ -39,12 +41,14 @@ function defaultData() {
     // Dados pessoais começam vazios: são preenchidos no aparelho (aba Mais) e nunca ficam no código.
     profile: { name: '', height: null, startWeight: null, goal: null, startDate: mondayOf(iso()) },
     workouts: defaultWorkouts(),
-    logs: [], weights: [], waist: []
+    logs: [], weights: [], waist: [],
+    settings: { morning: '07:00', evening: '18:30', before: 15 }
   };
 }
 function migrate(d) {
   const def = defaultData();
   d.profile = Object.assign(def.profile, d.profile || {});
+  d.settings = Object.assign(def.settings, d.settings || {});
   if (!Array.isArray(d.workouts)) d.workouts = def.workouts;
   ['logs', 'weights', 'waist'].forEach(k => { if (!Array.isArray(d[k])) d[k] = []; });
   return d;
@@ -85,9 +89,12 @@ function weekStep(w) {
 }
 function workoutSummary(w) {
   if (w.type === 'cardio') return `${w.phases.reduce((a, p) => a + (+p.min || 0), 0)} min · leve a moderado`;
-  const secs = w.exercises.reduce((a, e) => a + e.sets * (45 + (+e.rest || 0)), 0) + 300;
+  const secs = w.exercises.reduce((a, e) => a + e.sets * ((e.perSide ? 90 : 45) + (+e.rest || 0)), 0) + 300;
   return `${w.exercises.length} exercícios · ~${Math.round(secs / 60)} min`;
 }
+const SIDE = { E: 'Esq', D: 'Dir' };
+function setNum(e, i) { const st = e.sets[i]; return st.side ? e.sets.slice(0, i + 1).filter(x => x.side === st.side).length : i + 1; }
+function fmtSet(s) { return `${s.w ?? '–'}kg×${s.r ?? '–'}${s.side ? ' ' + s.side : ''}`; }
 function targetText(e) { return `${e.sets} × ${e.reps}${e.perSide ? ' cada lado' : ''}`; }
 function videoUrl(e) {
   return e.video && /^https?:\/\//i.test(e.video) ? e.video
@@ -129,6 +136,12 @@ function renderHoje() {
     h += `<div class="card accent" style="margin-top:16px"><h3>Complete seu perfil</h3>
       <p class="muted small">Nome, altura, peso inicial e meta ficam salvos só neste celular.</p>
       <button class="btn primary block" style="margin-top:10px" data-act="tab" data-v="mais">Preencher agora</button></div>`;
+  }
+
+  if (canNotify() && Notification.permission === 'default' && !S.settings.alertCardHidden) {
+    h += `<div class="card accent" style="margin-top:16px"><h3>${ICON.bell} Ative os alertas</h3>
+      <p class="muted small">Para receber o aviso de fim do descanso e das etapas do cardio mesmo usando outro app.</p>
+      <div class="row" style="margin-top:10px"><button class="btn primary grow" data-act="enableNotify">Ativar</button><button class="btn ghost" data-act="hideAlertCard">Agora não</button></div></div>`;
   }
 
   // costas no dia seguinte
@@ -319,7 +332,7 @@ function renderEvolucao() {
   }));
   h += `<div class="section-title">Cargas</div><div class="card">
     <select data-bind="chartEx" style="margin-top:0">${names.map(n => `<option ${n === ui.chartEx ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select>
-    ${pts.length ? chart([{ cls: 'line', pts }], { unit: 'kg' }) + `<ul class="list" style="margin-top:8px">${pts.slice(-4).reverse().map(p => `<li><span class="grow">${fmtShort(p.date)}</span><span class="muted small">${p.sets.map(s => `${s.w ?? '–'}kg×${s.r ?? '–'}`).join(' · ')}</span></li>`).join('')}</ul>`
+    ${pts.length ? chart([{ cls: 'line', pts }], { unit: 'kg' }) + `<ul class="list" style="margin-top:8px">${pts.slice(-4).reverse().map(p => `<li><span class="grow">${fmtShort(p.date)}</span><span class="muted small">${p.sets.map(fmtSet).join(' · ')}</span></li>`).join('')}</ul>`
       : '<p class="muted small" style="margin-top:12px">Sem cargas registradas para este exercício ainda.</p>'}
   </div>`;
 
@@ -333,7 +346,7 @@ function renderEvolucao() {
       l.back ? `costas: ${esc(l.back)}` : '', l.backNext ? `dia seguinte: ${esc(l.backNext)}` : ''].filter(Boolean).join(' · ');
     let det = '';
     if (open) {
-      det = (l.exercises || []).map(e => `<div class="row between small" style="padding:6px 0;border-top:1px solid var(--line)"><span>${esc(e.name)}</span><span class="muted">${e.sets.length ? e.sets.map(s => `${s.w ?? '–'}kg×${s.r ?? '–'}`).join(' · ') : 'não feito'}</span></div>`).join('')
+      det = (l.exercises || []).map(e => `<div class="row between small" style="padding:6px 0;border-top:1px solid var(--line)"><span>${esc(e.name)}</span><span class="muted">${e.sets.length ? e.sets.map(fmtSet).join(' · ') : 'não feito'}</span></div>`).join('')
         + (l.notes ? `<p class="small" style="margin-top:10px">📝 ${esc(l.notes)}</p>` : '')
         + `<button class="btn sm danger" style="margin-top:12px" data-act="delLog" data-id="${l.id}">Apagar registro</button>`;
     }
@@ -395,6 +408,27 @@ function renderMais() {
     <p class="muted small">A semana 1 começa na segunda-feira dessa data. Semanas ímpares: A-B-A; pares: B-A-B.</p>
   </div>
 
+  <div class="section-title">Alertas e lembretes</div>
+  <div class="card"><h3>Alertas de tempo</h3>
+    <p class="muted small">Som e vibração no fim do descanso e a cada etapa do cardio. Com as notificações ativadas, o aviso chega também quando você estiver em outro app.</p>
+    ${notifyStatus()}
+  </div>
+  <div class="card"><h3>Lembretes dos dias de treino</h3>
+    <p class="muted small">Cria os lembretes das próximas 8 semanas na agenda do celular, já com a ordem A-B-A / B-A-B, pesagem, caminhada de sábado e medida da cintura. Eles tocam mesmo com o app fechado.</p>
+    <div class="grid3" style="margin-top:12px">
+      <label class="field">Manhã<input type="time" data-bind="settings" data-f="morning" value="${esc(S.settings.morning)}"></label>
+      <label class="field">Tarde/noite<input type="time" data-bind="settings" data-f="evening" value="${esc(S.settings.evening)}"></label>
+      <label class="field">Avisar<select data-bind="settings" data-f="before">${[0, 10, 15, 30, 60].map(m => `<option value="${m}" ${+S.settings.before === m ? 'selected' : ''}>${m ? m + ' min antes' : 'Na hora'}</option>`).join('')}</select></label></div>
+    <button class="btn block primary" style="margin-top:12px" data-act="exportICS">Adicionar à agenda</button>
+    <p class="muted small">Depois de baixar, toque no arquivo <b>meu-treino-lembretes.ics</b> e escolha a Agenda (Samsung Calendar) para importar. Se mudar os horários ou os treinos, apague os eventos antigos antes de importar de novo.</p>
+  </div>
+  <div class="card"><h3>Usar junto com outro app</h3>
+    <ul class="bul">
+      <li><b>Janela flutuante:</b> durante o treino, toque no ícone ${ICON.pip} no topo. O cronômetro vira uma mini janela por cima dos outros apps. Toque nela para voltar.</li>
+      <li><b>Pop-up da Samsung:</b> abra os apps recentes (botão ▥), toque no ícone do Meu Treino no topo do cartão e escolha <b>Abrir em visualização pop-up</b>.</li>
+    </ul>
+  </div>
+
   <div class="section-title">Seus dados</div>
   <div class="card"><p class="muted small" style="margin-top:0">Tudo fica salvo só neste celular. Faça um backup de vez em quando (por exemplo, envie o arquivo para o seu Google Drive).</p>
     <button class="btn block primary" data-act="export">Exportar backup</button>
@@ -405,6 +439,14 @@ function renderMais() {
   if (installEvt) h += `<div class="section-title">Aplicativo</div><div class="card"><button class="btn block primary" data-act="install">Instalar na tela inicial</button></div>`;
   h += `<p class="muted small" style="text-align:center;margin-top:24px">Meu Treino</p>`;
   return h;
+}
+
+function notifyStatus() {
+  if (!canNotify()) return '<p class="small">Este navegador não permite notificações.</p>';
+  const p = Notification.permission;
+  if (p === 'granted') return '<div class="row" style="margin-top:10px"><span class="ok grow">✓ Notificações ativadas</span><button class="btn sm ghost" data-act="testNotify">Testar</button></div>';
+  if (p === 'denied') return '<div class="hint bad">As notificações estão bloqueadas. Para liberar: Configurações do Android → Aplicativos → Meu Treino → Notificações → ativar.</div>';
+  return '<button class="btn block primary" style="margin-top:10px" data-act="enableNotify">Ativar notificações</button>';
 }
 
 /* ---------- sessão de treino ---------- */
@@ -420,17 +462,23 @@ function startSession(wid) {
       kind: 'strength', stage: w.warmup ? 'warmup' : 'ex', idx: 0, rest: null,
       exercises: w.exercises.map(e => ({
         exId: e.id, name: e.name, target: targetText(e), rest: +e.rest || 0, notes: e.notes, video: e.video,
-        sets: Array.from({ length: Math.max(1, +e.sets || 1) }, () => ({ w: lastWeight(e.name), r: String(parseInt(e.reps) || ''), done: false }))
+        perSide: !!e.perSide,
+        // Exercícios "de cada lado": cada série vira duas (esquerdo e direito). Ex.: 2 × 8 de cada lado = 4 séries.
+        sets: Array.from({ length: Math.max(1, +e.sets || 1) }, () => e.perSide ? ['E', 'D'] : [null]).flat()
+          .map(side => Object.assign({ w: lastWeight(e.name), r: String(parseInt(e.reps) || ''), done: false }, side ? { side } : {}))
       }))
     });
   }
   unlockAudio(); requestWake(); saveSession(); window.scrollTo(0, 0); render();
 }
+function pipButton() {
+  return pipSupported() ? `<button class="icon-btn ${document.pictureInPictureElement ? 'on' : ''}" data-act="pip" aria-label="Janela flutuante" title="Janela flutuante">${ICON.pip}</button>` : '';
+}
 function renderSession() { return session.kind === 'cardio' ? renderCardio() : renderStrength(); }
 
 function renderStrength() {
   const s = session, n = s.exercises.length;
-  let h = `<div class="sbar"><button class="icon-btn" data-act="quit" aria-label="Sair">${ICON.close}</button><div class="sbar-title">${esc(s.name)}</div><div class="sbar-time" id="elapsed"></div></div>
+  let h = `<div class="sbar"><button class="icon-btn" data-act="quit" aria-label="Sair">${ICON.close}</button><div class="sbar-title">${esc(s.name)}</div><div class="sbar-time" id="elapsed"></div>${pipButton()}</div>
     <main class="page session ${s.rest ? 'has-rest' : ''}">`;
   h += `<div class="progress">${s.exercises.map((e, i) => `<i class="${e.sets.every(x => x.done) ? 'done' : (i === s.idx && s.stage === 'ex' ? 'on' : '')}"></i>`).join('')}</div>`;
 
@@ -447,11 +495,12 @@ function renderStrength() {
       <div class="row" style="margin-top:14px"><a class="btn primary grow" href="${esc(videoUrl(e))}" target="_blank" rel="noopener">${ICON.play} ${e.video ? 'Ver vídeo' : 'Como fazer (vídeo)'}</a></div>
       ${e.notes ? `<details class="howto" ${lastWeight(e.name) === '' ? 'open' : ''}><summary>Execução</summary><p>${esc(e.notes)}</p></details>` : ''}
       ${s.idx < 2 && getWorkout(s.workoutId)?.warmup ? '<div class="hint">Antes das séries, faça 1 série preparatória de 10 repetições com carga bem leve.</div>' : ''}
-      <div class="sets">${e.sets.map((st, i) => `<div class="set ${st.done ? 'done' : ''}"><div class="n">${i + 1}</div>
+      ${e.perSide ? '<div class="hint">Faça o lado esquerdo, troque de lado sem descanso e faça o direito. O descanso começa depois do lado direito.</div>' : ''}
+      <div class="sets">${e.sets.map((st, i) => `<div class="set ${st.done ? 'done' : ''}"><div class="n">${setNum(e, i)}${st.side ? `<small>${SIDE[st.side]}</small>` : ''}</div>
         <label>Carga kg<input type="text" inputmode="decimal" placeholder="–" data-bind="set" data-i="${i}" data-f="w" value="${esc(st.w)}"></label>
         <label>Reps<input type="text" inputmode="numeric" placeholder="–" data-bind="set" data-i="${i}" data-f="r" value="${esc(st.r)}"></label>
         <button class="tick" data-act="toggleSet" data-i="${i}" aria-label="Série feita">✓</button></div>`).join('')}</div>
-      <div class="row between" style="margin-top:8px"><button class="link" data-act="addSet">+ série</button>${e.sets.length > 1 ? '<button class="link" style="color:var(--muted)" data-act="removeSet">− série</button>' : ''}</div>
+      <div class="row between" style="margin-top:8px"><button class="link" data-act="addSet">+ série</button>${e.sets.length > (e.perSide ? 2 : 1) ? '<button class="link" style="color:var(--muted)" data-act="removeSet">− série</button>' : ''}</div>
       <div class="nav-row"><button class="btn ghost" data-act="goEx" data-i="${s.idx - 1}" ${s.idx === 0 ? 'disabled style="opacity:.4"' : ''}>Anterior</button>
       ${s.idx < n - 1 ? `<button class="btn primary" data-act="goEx" data-i="${s.idx + 1}">Próximo</button>` : `<button class="btn ok" data-act="toFinish">Finalizar treino</button>`}</div>`;
   } else {
@@ -501,7 +550,7 @@ function phaseAt(sec) {
 }
 function renderCardio() {
   const s = session, w = getWorkout(s.workoutId);
-  let h = `<div class="sbar"><button class="icon-btn" data-act="quit" aria-label="Sair">${ICON.close}</button><div class="sbar-title">${esc(s.name)}</div><div class="sbar-time"></div></div><main class="page session">`;
+  let h = `<div class="sbar"><button class="icon-btn" data-act="quit" aria-label="Sair">${ICON.close}</button><div class="sbar-title">${esc(s.name)}</div>${pipButton()}</div><main class="page session">`;
   if (s.stage === 'setup') {
     h += `<h1 style="margin-top:10px">${esc(s.name)}</h1><p class="muted">Escolha o aparelho mais confortável para as costas.</p>
       <div class="choices">${((w && w.options) || []).map(o => `<button class="choice ${s.modality === o ? 'on' : ''}" data-act="setMod" data-v="${esc(o)}">${esc(o)}</button>`).join('')}</div>
@@ -533,17 +582,24 @@ function tick() {
     if (el) el.textContent = mmss((now - session.startedAt) / 1000);
     if (session.rest) {
       const rem = (session.rest.endAt - now) / 1000;
-      if (rem <= 0) { session.rest = null; saveSession(); alertUser(); render(); return; }
+      if (rem <= 0) {
+        session.rest = null; saveSession(); alertUser();
+        const e = session.exercises[session.idx], nx = e && e.sets.find(x => !x.done);
+        notify('Descanso terminado', nx ? `Próxima: ${e.name} · série ${setNum(e, e.sets.indexOf(nx))}${nx.side ? ' ' + SIDE[nx.side] : ''}` : 'Hora da próxima série');
+        render(); return;
+      }
       const t = document.getElementById('restTime'), b = document.getElementById('restBar');
       if (t) t.textContent = mmss(Math.ceil(rem));
       if (b) b.style.width = (100 - rem / session.rest.total * 100).toFixed(1) + '%';
     }
+    drawPip();
   } else if (session.stage === 'run') {
+    drawPip();
     const e = cardioElapsed() / 1000, total = cardioTotal();
-    if (e >= total) { session.running = false; session.acc = total * 1000; session.stage = 'finish'; saveSession(); alertUser(true); render(); return; }
+    if (e >= total) { session.running = false; session.acc = total * 1000; session.stage = 'finish'; saveSession(); alertUser(true); notify('Cardio concluído 💪', 'Abra o app para salvar o treino.'); render(); return; }
     const ph = phaseAt(e);
     if (ph.i !== session.lastPhase) {
-      if (session.lastPhase >= 0) { alertUser(); toast(session.phases[ph.i].name); }
+      if (session.lastPhase >= 0) { const p = session.phases[ph.i]; alertUser(); toast(p.name); notify(`Agora: ${p.name} (${p.min} min)`, p.desc || ''); }
       session.lastPhase = ph.i; saveSession(); render(); return;
     }
     const set = (id, v) => { const x = document.getElementById(id); if (x) x.textContent = v; };
@@ -559,7 +615,7 @@ function finishAndSave() {
   const log = { id: uid(), ts: Date.now(), date: s.date, workoutId: s.workoutId, name: s.name, type: s.kind, back: s.back, notes: s.notes.trim() };
   if (s.kind === 'strength') {
     log.durationMin = Math.round((Date.now() - s.startedAt) / 60000);
-    log.exercises = s.exercises.map(e => ({ exId: e.exId, name: e.name, sets: e.sets.filter(x => x.done).map(x => ({ w: num(x.w), r: num(x.r) })) }));
+    log.exercises = s.exercises.map(e => ({ exId: e.exId, name: e.name, sets: e.sets.filter(x => x.done).map(x => Object.assign({ w: num(x.w), r: num(x.r) }, x.side ? { side: x.side } : {})) }));
   } else {
     log.minutes = Math.round(cardioElapsed() / 60000);
     log.modality = s.modality;
@@ -587,6 +643,110 @@ function alertUser(long) {
   if (navigator.vibrate) navigator.vibrate(long ? [300, 120, 300, 120, 500] : [250, 100, 250]);
   beep(880, .18, 0); beep(1175, .22, .25); if (long) beep(1568, .35, .55);
 }
+/* Notificação do sistema: aparece quando o app está em segundo plano (usando outro app ou na janela flutuante). */
+const canNotify = () => 'Notification' in window && 'serviceWorker' in navigator;
+function notify(title, body) {
+  if (!canNotify() || Notification.permission !== 'granted') return;
+  if (document.visibilityState === 'visible' && !document.pictureInPictureElement) return;
+  navigator.serviceWorker.ready.then(r => r.showNotification(title, {
+    body, icon: 'icon-192.png', tag: 'meu-treino-timer', renotify: true, vibrate: [300, 120, 300], data: { url: './index.html' }
+  })).catch(() => {});
+}
+
+/* Janela flutuante (picture-in-picture): um mini cronômetro que fica por cima de outros apps. */
+const pip = { video: null, canvas: null, key: '' };
+const pipSupported = () => !!(document.pictureInPictureEnabled && HTMLCanvasElement.prototype.captureStream);
+function pipInfo() {
+  const s = session;
+  if (!s) return null;
+  if (s.kind === 'cardio') {
+    if (s.stage !== 'run') return { top: s.name, big: '–', sub: 'Cardio' };
+    const e = cardioElapsed() / 1000, ph = phaseAt(e);
+    return { top: `${s.phases[ph.i].name}${s.running ? '' : ' (pausado)'}`, big: mmss(ph.rem), sub: `Total restante ${mmss(cardioTotal() - e)}`, pct: e / cardioTotal(), accent: true };
+  }
+  if (s.stage !== 'ex') return { top: s.name, big: mmss((Date.now() - s.startedAt) / 1000), sub: s.stage === 'warmup' ? 'Aquecimento' : 'Finalizar treino' };
+  const e = s.exercises[s.idx], nx = e.sets.find(x => !x.done);
+  const serie = nx ? `Série ${setNum(e, e.sets.indexOf(nx))}/${e.sets.length / (e.perSide ? 2 : 1)}${nx.side ? ' · ' + SIDE[nx.side] : ''}` : 'Exercício feito';
+  if (s.rest) {
+    const rem = Math.max(0, (s.rest.endAt - Date.now()) / 1000);
+    return { top: 'Descanso', big: mmss(Math.ceil(rem)), sub: `${serie} · ${e.name}`, pct: 1 - rem / s.rest.total, accent: true };
+  }
+  return { top: `Exercício ${s.idx + 1}/${s.exercises.length}`, big: serie, sub: `${e.name} · ${e.target}`, small: true };
+}
+function drawPip(force) {
+  if (!pip.canvas || !document.pictureInPictureElement) return;
+  const inf = pipInfo();
+  if (!inf) return;
+  const key = JSON.stringify(inf);
+  if (key === pip.key && !force) return;
+  pip.key = key;
+  const c = pip.canvas, g = c.getContext('2d'), W = c.width, H = c.height;
+  g.fillStyle = '#0F1115'; g.fillRect(0, 0, W, H);
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillStyle = '#9AA1AE'; g.font = '700 30px system-ui, sans-serif'; g.fillText(inf.top.toUpperCase(), W / 2, 50, W - 40);
+  g.fillStyle = inf.accent ? '#FF8A3D' : '#F2F3F5'; g.font = `900 ${inf.small ? 64 : 112}px system-ui, sans-serif`; g.fillText(inf.big, W / 2, 150, W - 40);
+  g.fillStyle = '#C9CDD4'; g.font = '600 28px system-ui, sans-serif'; g.fillText(inf.sub, W / 2, 245, W - 40);
+  if (inf.pct != null) {
+    g.fillStyle = '#262A33'; g.fillRect(40, 290, W - 80, 12);
+    g.fillStyle = '#FF8A3D'; g.fillRect(40, 290, (W - 80) * Math.min(1, Math.max(0, inf.pct)), 12);
+  }
+}
+async function openPip() {
+  if (!pipSupported()) { toast('Seu navegador não suporta janela flutuante'); return; }
+  try {
+    if (document.pictureInPictureElement) { await document.exitPictureInPicture(); return; }
+    if (!pip.canvas) {
+      pip.canvas = Object.assign(document.createElement('canvas'), { width: 640, height: 340 });
+      pip.video = Object.assign(document.createElement('video'), { muted: true, playsInline: true, autoplay: true });
+      pip.video.className = 'pip-src';
+      document.body.appendChild(pip.video);
+      pip.video.srcObject = pip.canvas.captureStream();
+      pip.video.addEventListener('leavepictureinpicture', () => { pip.key = ''; if (session) render(); });
+    }
+    pip.key = '';
+    const g = pip.canvas.getContext('2d'); g.fillStyle = '#0F1115'; g.fillRect(0, 0, 1, 1);
+    await pip.video.play();
+    await pip.video.requestPictureInPicture();
+    drawPip(true);
+    render();
+  } catch (e) { toast('Não foi possível abrir a janela flutuante'); }
+}
+
+/* Lembretes na agenda do celular (arquivo .ics com alarmes): funcionam mesmo com o app fechado. */
+function icsText(s) { return String(s).replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/([,;])/g, '\\$1'); }
+function icsFold(line) { const out = []; let l = line; while (l.length > 60) { out.push(l.slice(0, 60)); l = ' ' + l.slice(60); } out.push(l); return out.join('\r\n'); }
+function buildICS(weeks = 8) {
+  const st = S.settings, t = iso(), start = mondayOf(t);
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '');
+  const dt = (ds, hm) => ds.replace(/-/g, '') + 'T' + hm.replace(':', '') + '00';
+  const plusMin = (hm, m) => { const [h, mi] = hm.split(':').map(Number), x = h * 60 + mi + m; return `${pad2(Math.floor(x / 60) % 24)}:${pad2(x % 60)}`; };
+  const ev = [];
+  const add = (ds, hm, dur, kind, title, desc) => ev.push([
+    'BEGIN:VEVENT', `UID:meu-treino-${ds}-${kind}`, `DTSTAMP:${stamp}`, `DTSTART:${dt(ds, hm)}`, `DTEND:${dt(ds, plusMin(hm, dur))}`,
+    `SUMMARY:${icsText(title)}`, `DESCRIPTION:${icsText(desc)}`,
+    'BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${icsText(title)}`, `TRIGGER:-PT${+st.before || 0}M`, 'END:VALARM', 'END:VEVENT'
+  ].map(icsFold).join('\r\n'));
+  for (let i = 0; i < weeks * 7; i++) {
+    const ds = addDays(start, i);
+    if (ds < t) continue;
+    const p = planFor(ds);
+    if (p.morning === 'cardio') {
+      const c = getWorkout('cardio');
+      add(ds, st.morning, 30, 'manha', `Pesagem + ${c ? c.name : 'Cardio'}`, 'Pese-se em jejum, depois de ir ao banheiro. Depois, cardio leve a moderado. Abra o Meu Treino para o cronômetro.');
+    }
+    if (p.morning === 'walk') add(ds, st.morning, 30, 'manha', 'Caminhada leve (opcional)', 'Dia livre. Uma caminhada leve ajuda na recuperação.');
+    if (p.evening) {
+      const w = getWorkout(p.evening);
+      if (w) add(ds, st.evening, 60, 'tarde', `${w.name} · musculação`, (w.exercises || []).map(e => `• ${e.name} ${targetText(e)}`).join('\n') + '\nAbra o Meu Treino para registrar as séries.');
+    }
+  }
+  const lastW = S.waist.slice().sort((a, b) => a.date.localeCompare(b.date)).pop();
+  let wd = lastW ? addDays(lastW.date, 14) : t;
+  while (wd < t) wd = addDays(wd, 14);
+  for (; wd <= addDays(start, weeks * 7 - 1); wd = addDays(wd, 14)) add(wd, plusMin(st.morning, -10), 10, 'cintura', 'Medir a cintura', 'Sempre no mesmo ponto e nas mesmas condições. Anote na aba Evolução do Meu Treino.');
+  return ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Meu Treino//PT-BR', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH', 'X-WR-CALNAME:Meu Treino', ...ev, 'END:VCALENDAR'].join('\r\n') + '\r\n';
+}
+
 async function requestWake() { try { if ('wakeLock' in navigator && !wakeLock) { wakeLock = await navigator.wakeLock.request('screen'); wakeLock.addEventListener('release', () => { wakeLock = null; }); } } catch (e) { /* ignora */ } }
 function releaseWake() { try { if (wakeLock) wakeLock.release(); } catch (e) { /* ignora */ } wakeLock = null; }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && session) { requestWake(); tick(); } });
@@ -674,14 +834,21 @@ const ACT = {
     st.done = !st.done;
     if (st.done) {
       const all = e.sets.every(x => x.done), last = session.idx === session.exercises.length - 1;
-      if (!(all && last)) startRest(e.rest);
+      const nx = e.sets[+d.i + 1];
+      const switchSide = st.side === 'E' && nx && nx.side === 'D' && !nx.done;
+      if (switchSide) toast('Agora o lado direito');
+      else if (!(all && last)) startRest(e.rest);
       if (all && !last) { session.idx++; window.scrollTo(0, 0); toast('Próximo: ' + session.exercises[session.idx].name); }
       if (all && last) toast('Último exercício concluído! Toque em Finalizar.');
     }
     saveSession(); render();
   },
-  addSet: () => { const e = session.exercises[session.idx], p = e.sets[e.sets.length - 1]; e.sets.push({ w: p ? p.w : '', r: p ? p.r : '', done: false }); saveSession(); render(); },
-  removeSet: () => { const e = session.exercises[session.idx]; if (e.sets.length > 1) { e.sets.pop(); saveSession(); render(); } },
+  addSet: () => {
+    const e = session.exercises[session.idx], p = e.sets[e.sets.length - 1];
+    (e.perSide ? ['E', 'D'] : [null]).forEach(side => e.sets.push(Object.assign({ w: p ? p.w : '', r: p ? p.r : '', done: false }, side ? { side } : {})));
+    saveSession(); render();
+  },
+  removeSet: () => { const e = session.exercises[session.idx], k = e.perSide ? 2 : 1; if (e.sets.length > k) { e.sets.splice(-k, k); saveSession(); render(); } },
   restAdd: () => { if (session.rest) { session.rest.endAt += 15000; session.rest.total += 15; saveSession(); tick(); } },
   restSkip: () => { session.rest = null; saveSession(); render(); },
   toFinish: () => { session.stage = 'finish'; session.rest = null; saveSession(); window.scrollTo(0, 0); render(); },
@@ -715,6 +882,28 @@ const ACT = {
     if (!confirm('Apagar TODOS os dados (histórico, pesos, medidas e edições)? Isso não pode ser desfeito.')) return;
     S = defaultData(); save(); session = null; saveSession(); render(); toast('Dados apagados');
   },
+  enableNotify: async () => {
+    if (!canNotify()) { toast('Este navegador não permite notificações'); return; }
+    unlockAudio();
+    const r = await Notification.requestPermission();
+    toast(r === 'granted' ? 'Alertas ativados 🔔' : 'Notificações não autorizadas');
+    render();
+  },
+  hideAlertCard: () => { S.settings.alertCardHidden = true; save(); render(); },
+  testNotify: () => {
+    unlockAudio(); alertUser();
+    navigator.serviceWorker.ready.then(r => r.showNotification('Descanso terminado', { body: 'Assim chega o aviso quando você estiver em outro app.', icon: 'icon-192.png', tag: 'meu-treino-timer', renotify: true, vibrate: [300, 120, 300] }))
+      .catch(() => toast('Não foi possível mostrar a notificação'));
+  },
+  exportICS: () => {
+    const blob = new Blob([buildICS(8)], { type: 'text/calendar;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = 'meu-treino-lembretes.ics';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    toast('Arquivo baixado. Abra-o para adicionar à agenda.');
+  },
+  pip: () => openPip(),
   install: async () => { if (!installEvt) return; installEvt.prompt(); await installEvt.userChoice; installEvt = null; render(); }
 };
 
@@ -740,6 +929,7 @@ const BIND = {
     save();
   },
   chartEx: t => { ui.chartEx = t.value; render(); },
+  settings: t => { const f = t.dataset.f; if (!t.value) return; S.settings[f] = f === 'before' ? +t.value : t.value; save(); },
   import: t => {
     const file = t.files && t.files[0];
     if (!file) return;
